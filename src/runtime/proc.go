@@ -2722,8 +2722,8 @@ top:
 		asmcgocall(*cgo_yield, nil)
 	}
 
-	// local runql each 3 times
-	if pp.schedtick%3 == 0 {
+	// local runql each 61*2+1 times
+	if pp.schedtick%123 == 0 && !runqlempty(pp) {
 		if gp, inheritTime := runqlget(pp); gp != nil {
 			return gp, inheritTime, false
 		}
@@ -5968,6 +5968,16 @@ func runqempty(pp *p) bool {
 		runnext := atomic.Loaduintptr((*uintptr)(unsafe.Pointer(&pp.runnext)))
 		if tail == atomic.Load(&pp.runqtail) && taill == atomic.Load(&pp.runqltail) {
 			return head == tail && runnext == 0 && headl == taill
+		}
+	}
+}
+
+func runqlempty(pp *p) bool {
+	for {
+		headl := atomic.Load(&pp.runqlhead)
+		taill := atomic.Load(&pp.runqltail)
+		if taill == atomic.Load(&pp.runqltail) {
+			return headl == taill
 		}
 	}
 }
