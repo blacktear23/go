@@ -2708,7 +2708,11 @@ top:
 		gp := globrunqget(pp, 1)
 		unlock(&sched.lock)
 		if gp != nil {
-			return gp, false, false
+			// Check priority if high return if low put it in runq
+			if gp.priority == 0 {
+				return gp, false, false
+			}
+			runqput(pp, gp, false)
 		}
 	}
 
