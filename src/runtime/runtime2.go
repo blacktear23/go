@@ -464,6 +464,7 @@ type g struct {
 	// for stack shrinking.
 	parkingOnChan atomic.Bool
 
+	priority       int8     // priority > 0 means lower priority
 	raceignore     int8     // ignore race detection events
 	sysblocktraced bool     // StartTrace has emitted EvGoInSyscall about this goroutine
 	tracking       bool     // whether we're tracking this G for sched latency statistics
@@ -643,6 +644,11 @@ type p struct {
 	// Note that while other P's may atomically CAS this to zero,
 	// only the owner P can CAS it to a valid G.
 	runnext guintptr
+
+	// Low runqueue
+	runqlhead uint32
+	runqltail uint32
+	runql     [128]guintptr
 
 	// Available G's (status == Gdead)
 	gFree struct {
