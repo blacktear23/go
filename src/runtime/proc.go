@@ -4876,19 +4876,20 @@ func (pp *p) destroy() {
 	assertLockHeld(&sched.lock)
 	assertWorldStopped()
 
+	// Move all runable goroutines to the global queue in run queue-low
+	for pp.runqlhead != pp.runqltail {
+		// Pop from tail of local low quque
+		pp.runqltail--
+		gp := pp.runql[pp.runqltail%uint32(len(pp.runql))].ptr()
+		globrunqputhead(gp)
+	}
+
 	// Move all runnable goroutines to the global queue
 	for pp.runqhead != pp.runqtail {
 		// Pop from tail of local queue
 		pp.runqtail--
 		gp := pp.runq[pp.runqtail%uint32(len(pp.runq))].ptr()
 		// Push onto head of global queue
-		globrunqputhead(gp)
-	}
-	// Move all runable goroutines to the global queue in run queue-low
-	for pp.runqlhead != pp.runqltail {
-		// Pop from tail of local low quque
-		pp.runqltail--
-		gp := pp.runql[pp.runqltail%uint32(len(pp.runql))].ptr()
 		globrunqputhead(gp)
 	}
 
