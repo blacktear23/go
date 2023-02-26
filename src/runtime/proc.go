@@ -2726,7 +2726,8 @@ top:
 		asmcgocall(*cgo_yield, nil)
 	}
 
-	// local runql each 61*2+1 times
+	// Check the local low queue once in a while to ensure fairness.
+	// Using 123 will not conflict with global run queue check.
 	if pp.schedtick%123 == 0 && !runqlempty(pp) {
 		if gp, inheritTime := runqlget(pp); gp != nil {
 			return gp, inheritTime, false
@@ -6145,25 +6146,48 @@ func runqlputslow(pp *p, gp *g, h, t uint32) bool {
 // this will temporarily acquire the scheduler lock.
 // Executed only by the owner P.
 func runqputbatch(pp *p, q *gQueue, qsize int) {
+	var lowq gQueue
+	lqn := uint32(0)
 	h := atomic.LoadAcq(&pp.runqhead)
 	t := pp.runqtail
 	n := uint32(0)
 	hl := atomic.LoadAcq(&pp.runqlhead)
 	tl := pp.runqltail
 	nl := uint32(0)
-	for !q.empty() && (t-h) < uint32(len(pp.runq)) && (tl-hl) < uint32(len(pp.runql)) {
+	// below loop will grab all high priority G as possible.
+	// if high priority queue not full but low priority queue is full,
+	// just put next low priority G to local temp queue
+	// and then the local temp queue will put all G to global run queue.
+	// NOTE: There's another concern about it should break if low priority queue is
+	// overflow too much it should break the loop to save CPU time.
+	// Currently if low priority queue is overflow 25% percent of elements, it will
+	// break the loop.
+	// q not empty and runq has free space
+	for !q.empty() && (t-h) < uint32(len(pp.runq)) {
 		gp := q.pop()
 		if gp.priority == 0 {
+			// High priority G just put to runq
 			pp.runq[t%uint32(len(pp.runq))].set(gp)
 			t++
 			n++
 		} else {
-			pp.runql[tl%uint32(len(pp.runql))].set(gp)
-			tl++
-			nl++
+			// Low priority G, if runql not full put it to p's runql,
+			// else put it to local queue and then put them to global run queue.
+			if (tl - hl) < uint32(len(pp.runql)) {
+				pp.runql[tl%uint32(len(pp.runql))].set(gp)
+				tl++
+				nl++
+			} else {
+				lowq.pushBack(gp)
+				lqn++
+				// overflow 25% runql size just break
+				if lqn > uint32(len(pp.runql))/4 {
+					break
+				}
+			}
 		}
 	}
-	qsize -= int(n + nl)
+	qsize -= int(n + nl + lqn)
 
 	if randomizeScheduler {
 		off := func(o uint32) uint32 {
@@ -6177,9 +6201,16 @@ func runqputbatch(pp *p, q *gQueue, qsize int) {
 
 	atomic.StoreRel(&pp.runqtail, t)
 	atomic.StoreRel(&pp.runqltail, tl)
+	// Put not empty queue
 	if !q.empty() {
 		lock(&sched.lock)
 		globrunqputbatch(q, int32(qsize))
+		unlock(&sched.lock)
+	}
+	// Put not empty low queue
+	if lqn > 0 {
+		lock(&sched.lock)
+		globrunqputbatch(&lowq, int32(lqn))
 		unlock(&sched.lock)
 	}
 }
