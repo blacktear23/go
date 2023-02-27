@@ -4313,6 +4313,8 @@ func newproc1(fn *funcval, callergp *g, callerpc uintptr) *g {
 	if isSystemGoroutine(newg, false) {
 		sched.ngsys.Add(1)
 	} else {
+		// Only user goroutines inherit parent's priority
+		newg.priority = callergp.priority
 		// Only user goroutines inherit pprof labels.
 		if mp.curg != nil {
 			newg.labels = mp.curg.labels
@@ -4576,6 +4578,11 @@ func LockOSThread() {
 // SetGoroutinePriority update go routine's priority 0 means high, > 0 means lower
 func SetGoroutinePriority(priority int8) {
 	getg().priority = priority
+}
+
+// GetGoroutinePriority get go routine's priority
+func GetGoroutinePriority() int8 {
+	return getg().priority
 }
 
 //go:nosplit
