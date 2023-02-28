@@ -1323,7 +1323,7 @@ func startTheWorldWithSema(emitTraceEvent bool) int64 {
 	mp := acquirem() // disable preemption because it can be holding p in a local var
 	if netpollinited() {
 		list := netpoll(0) // non-blocking
-		injectglist(&list)
+		injectglist(&list, false)
 	}
 	lock(&sched.lock)
 
@@ -2763,13 +2763,14 @@ top:
 	// anyway.
 	if netpollinited() && netpollWaiters.Load() > 0 && sched.lastpoll.Load() != 0 {
 		if list := netpoll(0); !list.empty() { // non-blocking
-			gp := list.pop()
-			injectglist(&list)
-			casgstatus(gp, _Gwaiting, _Grunnable)
-			if trace.enabled {
-				traceGoUnpark(gp, 0)
+			gp := injectglist(&list, true)
+			if gp != nil {
+				// casgstatus(gp, _Gwaiting, _Grunnable)
+				if trace.enabled {
+					traceGoUnpark(gp, 0)
+				}
+				return gp, false, false
 			}
-			return gp, false, false
 		}
 	}
 
@@ -2987,17 +2988,18 @@ top:
 		pp, _ := pidleget(now)
 		unlock(&sched.lock)
 		if pp == nil {
-			injectglist(&list)
+			injectglist(&list, false)
 		} else {
 			acquirep(pp)
 			if !list.empty() {
-				gp := list.pop()
-				injectglist(&list)
-				casgstatus(gp, _Gwaiting, _Grunnable)
-				if trace.enabled {
-					traceGoUnpark(gp, 0)
+				gp := injectglist(&list, true)
+				if gp != nil {
+					// casgstatus(gp, _Gwaiting, _Grunnable)
+					if trace.enabled {
+						traceGoUnpark(gp, 0)
+					}
+					return gp, false, false
 				}
-				return gp, false, false
 			}
 			if wasSpinning {
 				mp.becomeSpinning()
@@ -3028,7 +3030,7 @@ func pollWork() bool {
 	}
 	if netpollinited() && netpollWaiters.Load() > 0 && sched.lastpoll.Load() != 0 {
 		if list := netpoll(0); !list.empty() {
-			injectglist(&list)
+			injectglist(&list, false)
 			return true
 		}
 	}
@@ -3264,9 +3266,9 @@ func resetspinning() {
 // local run queue.
 // This may temporarily acquire sched.lock.
 // Can run concurrently with GC.
-func injectglist(glist *gList) {
+func injectglist(glist *gList, best bool) *g {
 	if glist.empty() {
-		return
+		return nil
 	}
 	if trace.enabled {
 		for gp := glist.head.ptr(); gp != nil; gp = gp.schedlink.ptr() {
@@ -3311,11 +3313,19 @@ func injectglist(glist *gList) {
 
 	pp := getg().m.p.ptr()
 	if pp == nil {
+		var gp *g = nil
+		if best {
+			gp = q.pop()
+			if qsize == 1 {
+				return gp
+			}
+			qsize -= 1
+		}
 		lock(&sched.lock)
 		globrunqputbatch(&q, int32(qsize))
 		unlock(&sched.lock)
 		startIdle(qsize)
-		return
+		return gp
 	}
 
 	npidle := int(sched.npidle.Load())
@@ -3323,8 +3333,21 @@ func injectglist(glist *gList) {
 	var n int
 	for n = 0; n < npidle && !q.empty(); n++ {
 		g := q.pop()
-		globq.pushBack(g)
+		if g.priority == 0 {
+			globq.push(g)
+		} else {
+			globq.pushBack(g)
+		}
 	}
+
+	empty := q.empty()
+	var gp *g = nil
+	// If empty we can pop a G from global queue
+	if empty && n > 0 {
+		gp = globq.pop()
+		n--
+	}
+
 	if n > 0 {
 		lock(&sched.lock)
 		globrunqputbatch(&globq, int32(n))
@@ -3333,9 +3356,10 @@ func injectglist(glist *gList) {
 		qsize -= n
 	}
 
-	if !q.empty() {
-		runqputbatch(pp, &q, qsize)
+	if !empty {
+		return runqputbatch(pp, &q, qsize, best)
 	}
+	return gp
 }
 
 // One round of scheduler: find a runnable goroutine and execute it.
@@ -5405,7 +5429,7 @@ func sysmon() {
 				// observes that there is no work to do and no other running M's
 				// and reports deadlock.
 				incidlelocked(-1)
-				injectglist(&list)
+				injectglist(&list, false)
 				incidlelocked(1)
 			}
 		}
@@ -5446,7 +5470,7 @@ func sysmon() {
 			forcegc.idle.Store(false)
 			var list gList
 			list.push(forcegc.g)
-			injectglist(&list)
+			injectglist(&list, false)
 			unlock(&forcegc.lock)
 		}
 		if debug.schedtrace > 0 && lasttrace+int64(debug.schedtrace)*1000000 <= now {
@@ -6153,8 +6177,12 @@ func runqlputslow(pp *p, gp *g, h, t uint32) bool {
 // If the queue is full, they are put on the global queue; in that case
 // this will temporarily acquire the scheduler lock.
 // Executed only by the owner P.
-func runqputbatch(pp *p, q *gQueue, qsize int) {
-	var lowq gQueue
+func runqputbatch(pp *p, q *gQueue, qsize int, best bool) *g {
+	var (
+		lowq      gQueue
+		bestG     *g = nil
+		firstLowG *g = nil
+	)
 	lqn := uint32(0)
 	h := atomic.LoadAcq(&pp.runqhead)
 	t := pp.runqtail
@@ -6174,11 +6202,25 @@ func runqputbatch(pp *p, q *gQueue, qsize int) {
 	for !q.empty() && (t-h) < uint32(len(pp.runq)) {
 		gp := q.pop()
 		if gp.priority == 0 {
+			if best {
+				if bestG == nil {
+					// Get the first high-priority G to bestG
+					bestG = gp
+					continue
+				}
+			}
 			// High priority G just put to runq
 			pp.runq[t%uint32(len(pp.runq))].set(gp)
 			t++
 			n++
 		} else {
+			if best {
+				if firstLowG == nil {
+					// Get the first low-priority G
+					firstLowG = gp
+					continue
+				}
+			}
 			// Low priority G, if runql not full put it to p's runql,
 			// else put it to local queue and then put them to global run queue.
 			if (tl - hl) < uint32(len(pp.runql)) {
@@ -6192,6 +6234,20 @@ func runqputbatch(pp *p, q *gQueue, qsize int) {
 				if lqn > uint32(len(pp.runql))/4 {
 					break
 				}
+			}
+		}
+	}
+	if best {
+		if bestG == nil {
+			// We cannot found the best high-priority G
+			// Just use the low-priority G
+			bestG = firstLowG
+		} else {
+			// We found the best high-priority G, just
+			// put the low priority G to global Queue
+			if firstLowG != nil {
+				lowq.pushBack(firstLowG)
+				lqn++
 			}
 		}
 	}
@@ -6221,6 +6277,7 @@ func runqputbatch(pp *p, q *gQueue, qsize int) {
 		globrunqputbatch(&lowq, int32(lqn))
 		unlock(&sched.lock)
 	}
+	return bestG
 }
 
 // Get g from local runnable queue.

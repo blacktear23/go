@@ -613,7 +613,7 @@ func gcAssistAlloc1(gp *g, scanWork int64) {
 func gcWakeAllAssists() {
 	lock(&work.assistQueue.lock)
 	list := work.assistQueue.q.popList()
-	injectglist(&list)
+	injectglist(&list, false)
 	unlock(&work.assistQueue.lock)
 }
 

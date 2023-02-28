@@ -1066,7 +1066,7 @@ func gcMarkTermination() {
 	// Bump GC cycle count and wake goroutines waiting on sweep.
 	lock(&work.sweepWaiters.lock)
 	memstats.numgc++
-	injectglist(&work.sweepWaiters.list)
+	injectglist(&work.sweepWaiters.list, false)
 	unlock(&work.sweepWaiters.lock)
 
 	// Release the CPU limiter.

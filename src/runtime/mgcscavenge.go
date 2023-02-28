@@ -424,7 +424,7 @@ func (s *scavengerState) wake() {
 		// too much.
 		var list gList
 		list.push(s.g)
-		injectglist(&list)
+		injectglist(&list, false)
 	}
 	unlock(&s.lock)
 }
