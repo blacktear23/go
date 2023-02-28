@@ -2763,9 +2763,9 @@ top:
 	// anyway.
 	if netpollinited() && netpollWaiters.Load() > 0 && sched.lastpoll.Load() != 0 {
 		if list := netpoll(0); !list.empty() { // non-blocking
+			// This will find the high priority G first then low priority
 			gp := injectglist(&list, true)
 			if gp != nil {
-				// casgstatus(gp, _Gwaiting, _Grunnable)
 				if trace.enabled {
 					traceGoUnpark(gp, 0)
 				}
@@ -6202,24 +6202,20 @@ func runqputbatch(pp *p, q *gQueue, qsize int, best bool) *g {
 	for !q.empty() && (t-h) < uint32(len(pp.runq)) {
 		gp := q.pop()
 		if gp.priority == 0 {
-			if best {
-				if bestG == nil {
-					// Get the first high-priority G to bestG
-					bestG = gp
-					continue
-				}
+			if best && bestG == nil {
+				// Get the first high-priority G to bestG
+				bestG = gp
+				continue
 			}
 			// High priority G just put to runq
 			pp.runq[t%uint32(len(pp.runq))].set(gp)
 			t++
 			n++
 		} else {
-			if best {
-				if firstLowG == nil {
-					// Get the first low-priority G
-					firstLowG = gp
-					continue
-				}
+			if best && firstLowG == nil {
+				// Get the first low-priority G
+				firstLowG = gp
+				continue
 			}
 			// Low priority G, if runql not full put it to p's runql,
 			// else put it to local queue and then put them to global run queue.
