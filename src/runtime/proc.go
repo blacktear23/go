@@ -2765,12 +2765,10 @@ top:
 		if list := netpoll(0); !list.empty() { // non-blocking
 			// This will find the high priority G first then low priority
 			gp := injectglist(&list, true)
-			if gp != nil {
-				if trace.enabled {
-					traceGoUnpark(gp, 0)
-				}
-				return gp, false, false
+			if trace.enabled {
+				traceGoUnpark(gp, 0)
 			}
+			return gp, false, false
 		}
 	}
 
@@ -2993,13 +2991,11 @@ top:
 			acquirep(pp)
 			if !list.empty() {
 				gp := injectglist(&list, true)
-				if gp != nil {
-					// casgstatus(gp, _Gwaiting, _Grunnable)
-					if trace.enabled {
-						traceGoUnpark(gp, 0)
-					}
-					return gp, false, false
+				// casgstatus(gp, _Gwaiting, _Grunnable)
+				if trace.enabled {
+					traceGoUnpark(gp, 0)
 				}
+				return gp, false, false
 			}
 			if wasSpinning {
 				mp.becomeSpinning()
