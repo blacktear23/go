@@ -5690,6 +5690,8 @@ pkg runtime, func Stack([]uint8, bool) int
 pkg runtime, func ThreadCreateProfile([]StackRecord) (int, bool)
 pkg runtime, func UnlockOSThread()
 pkg runtime, func Version() string
+pkg runtime, func SetGoroutinePriority(int8)
+pkg runtime, func GetGoroutinePriority() int8
 pkg runtime, method (*Func) Entry() uintptr
 pkg runtime, method (*Func) FileLine(uintptr) (string, int)
 pkg runtime, method (*Func) Name() string

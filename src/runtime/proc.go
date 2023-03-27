@@ -2765,9 +2765,6 @@ top:
 		if list := netpoll(0); !list.empty() { // non-blocking
 			// This will find the high priority G first then low priority
 			gp := injectglist(&list, true)
-			if trace.enabled {
-				traceGoUnpark(gp, 0)
-			}
 			return gp, false, false
 		}
 	}
@@ -2991,10 +2988,6 @@ top:
 			acquirep(pp)
 			if !list.empty() {
 				gp := injectglist(&list, true)
-				// casgstatus(gp, _Gwaiting, _Grunnable)
-				if trace.enabled {
-					traceGoUnpark(gp, 0)
-				}
 				return gp, false, false
 			}
 			if wasSpinning {
@@ -3338,8 +3331,8 @@ func injectglist(glist *gList, best bool) *g {
 
 	empty := q.empty()
 	var gp *g = nil
-	// If empty we can pop a G from global queue
-	if empty && n > 0 {
+	// If empty we can pop a G from global queue if best set to true
+	if best && empty && n > 0 {
 		gp = globq.pop()
 		n--
 	}
@@ -5996,9 +5989,9 @@ func runqempty(pp *p) bool {
 	for {
 		head := atomic.Load(&pp.runqhead)
 		tail := atomic.Load(&pp.runqtail)
+		runnext := atomic.Loaduintptr((*uintptr)(unsafe.Pointer(&pp.runnext)))
 		headl := atomic.Load(&pp.runqlhead)
 		taill := atomic.Load(&pp.runqltail)
-		runnext := atomic.Loaduintptr((*uintptr)(unsafe.Pointer(&pp.runnext)))
 		if tail == atomic.Load(&pp.runqtail) && taill == atomic.Load(&pp.runqltail) {
 			return head == tail && runnext == 0 && headl == taill
 		}

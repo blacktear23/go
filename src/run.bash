@@ -60,3 +60,4 @@ fi
 
 export GOPATH=/nonexist-gopath
 exec ../bin/go tool dist test -rebuild "$@"
+# exec ../bin/go test -short -v -count=1 -timeout=9m0s -test.run=TestTraceSymbolize runtime/trace
